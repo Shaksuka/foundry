@@ -13,7 +13,7 @@ use revm::{
     primitives::eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE,
 };
 use serde_json::json;
-use std::str::FromStr;
+use std::{str::FromStr, time::Instant};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn can_load_state() {
@@ -222,6 +222,124 @@ async fn can_preserve_historical_states_between_dump_and_load() {
         greeter.greet().block(BlockId::number(change_greeting_blk_num)).call().await.unwrap();
 
     assert_eq!(greeting_after_change, "World!");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn can_dump_snapshot_only_state() {
+    let (api, handle) = spawn(NodeConfig::test()).await;
+    let provider = handle.http_provider();
+
+    let greeter = Greeter::deploy(&provider, "Hello".to_string()).await.unwrap();
+    let address = greeter.address();
+
+    greeter
+        .setGreeting("World!".to_string())
+        .send()
+        .await
+        .unwrap()
+        .get_receipt()
+        .await
+        .unwrap();
+
+    api.mine_one().await;
+
+    let dump_started = Instant::now();
+    let snapshot_dump: Bytes = provider
+        .raw_request("anvil_dumpStateSnapshot".into(), ())
+        .await
+        .unwrap();
+    let snapshot_elapsed = dump_started.elapsed();
+
+    let mut decoder = flate2::read::GzDecoder::new(snapshot_dump.as_ref());
+    let mut decoded = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut decoded).unwrap();
+    let state: SerializableState = serde_json::from_slice(&decoded).unwrap();
+
+    assert!(state.blocks.is_empty());
+    assert!(state.transactions.is_empty());
+    assert!(state.historical_states.is_none());
+    assert_eq!(state.best_block_number, Some(3));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let state_file = tmp.path().join("state.json");
+    foundry_common::fs::write_json_file(&state_file, &state).unwrap();
+
+    let (_api, handle) = spawn(NodeConfig::test().with_init_state_path(state_file)).await;
+    let provider = handle.http_provider();
+    let greeter = Greeter::new(*address, provider);
+    let greeting = greeter.greet().call().await.unwrap();
+    assert_eq!(greeting, "World!");
+
+    println!(
+        "snapshot-only dump: compressed={}B uncompressed={}B elapsed={:?}",
+        snapshot_dump.len(),
+        decoded.len(),
+        snapshot_elapsed
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snapshot_only_dump_omits_chain_history_payload() {
+    let (api, handle) = spawn(NodeConfig::test()).await;
+    let provider = handle.http_provider();
+
+    let greeter = Greeter::deploy(&provider, "Hello".to_string()).await.unwrap();
+
+    for idx in 0..25u64 {
+        greeter
+            .setGreeting(format!("Hello {idx}"))
+            .send()
+            .await
+            .unwrap()
+            .get_receipt()
+            .await
+            .unwrap();
+        api.mine_one().await;
+    }
+
+    let full_started = Instant::now();
+    let full_dump = api.anvil_dump_state(Some(false)).await.unwrap();
+    let full_elapsed = full_started.elapsed();
+
+    let snapshot_started = Instant::now();
+    let snapshot_dump: Bytes = provider
+        .raw_request("anvil_dumpStateSnapshot".into(), ())
+        .await
+        .unwrap();
+    let snapshot_elapsed = snapshot_started.elapsed();
+
+    let full_state = {
+        let mut decoder = flate2::read::GzDecoder::new(full_dump.as_ref());
+        let mut decoded = Vec::new();
+        std::io::Read::read_to_end(&mut decoder, &mut decoded).unwrap();
+        serde_json::from_slice::<SerializableState>(&decoded).unwrap()
+    };
+
+    let snapshot_state = {
+        let mut decoder = flate2::read::GzDecoder::new(snapshot_dump.as_ref());
+        let mut decoded = Vec::new();
+        std::io::Read::read_to_end(&mut decoder, &mut decoded).unwrap();
+        serde_json::from_slice::<SerializableState>(&decoded).unwrap()
+    };
+
+    assert!(!full_state.blocks.is_empty());
+    assert!(!full_state.transactions.is_empty());
+    assert!(snapshot_state.blocks.is_empty());
+    assert!(snapshot_state.transactions.is_empty());
+    assert!(snapshot_dump.len() < full_dump.len());
+
+    println!(
+        "full dump: compressed={}B blocks={} txs={} elapsed={:?}",
+        full_dump.len(),
+        full_state.blocks.len(),
+        full_state.transactions.len(),
+        full_elapsed
+    );
+    println!(
+        "snapshot-only dump: compressed={}B elapsed={:?}",
+        snapshot_dump.len(),
+        snapshot_elapsed
+    );
 }
 
 // <https://github.com/foundry-rs/foundry/issues/9053>

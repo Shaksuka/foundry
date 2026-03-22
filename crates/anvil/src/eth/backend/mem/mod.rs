@@ -3587,16 +3587,23 @@ where
 }
 
 impl Backend<FoundryNetwork> {
-    /// Get the current state.
-    pub async fn serialized_state(
+    async fn serialized_state_with_options(
         &self,
+        include_chain_history: bool,
         preserve_historical_states: bool,
     ) -> Result<SerializableState, BlockchainError> {
         let at = self.env.read().evm_env.block_env.clone();
-        let best_number = self.blockchain.storage.read().best_number;
-        let blocks = self.blockchain.storage.read().serialized_blocks();
-        let transactions = self.blockchain.storage.read().serialized_transactions();
-        let historical_states = if preserve_historical_states {
+        let (best_number, blocks, transactions) = {
+            let storage = self.blockchain.storage.read();
+            let best_number = storage.best_number;
+            let blocks =
+                include_chain_history.then(|| storage.serialized_blocks()).unwrap_or_default();
+            let transactions =
+                include_chain_history.then(|| storage.serialized_transactions()).unwrap_or_default();
+            (best_number, blocks, transactions)
+        };
+
+        let historical_states = if include_chain_history && preserve_historical_states {
             Some(self.states.write().serialized_states())
         } else {
             None
@@ -3615,15 +3622,39 @@ impl Backend<FoundryNetwork> {
         })
     }
 
+    /// Get the current state.
+    pub async fn serialized_state(
+        &self,
+        preserve_historical_states: bool,
+    ) -> Result<SerializableState, BlockchainError> {
+        self.serialized_state_with_options(true, preserve_historical_states).await
+    }
+
+    /// Get only the latest chain snapshot without serializing block or transaction history.
+    pub async fn serialized_state_snapshot(&self) -> Result<SerializableState, BlockchainError> {
+        self.serialized_state_with_options(false, false).await
+    }
+
     /// Write all chain data to serialized bytes buffer
     pub async fn dump_state(
         &self,
         preserve_historical_states: bool,
     ) -> Result<Bytes, BlockchainError> {
         let state = self.serialized_state(preserve_historical_states).await?;
+        Self::gzip_serialize(&state)
+    }
+
+    /// Write only the latest chain snapshot to serialized bytes buffer.
+    pub async fn dump_state_snapshot(&self) -> Result<Bytes, BlockchainError> {
+        let state = self.serialized_state_snapshot().await?;
+        Self::gzip_serialize(&state)
+    }
+
+    /// Gzip-compress a serializable state into bytes.
+    fn gzip_serialize(state: &SerializableState) -> Result<Bytes, BlockchainError> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder
-            .write_all(&serde_json::to_vec(&state).unwrap_or_default())
+            .write_all(&serde_json::to_vec(state).unwrap_or_default())
             .map_err(|_| BlockchainError::DataUnavailable)?;
         Ok(encoder.finish().unwrap_or_default().into())
     }
@@ -3649,15 +3680,17 @@ impl Backend<FoundryNetwork> {
                 // Ref: https://github.com/foundry-rs/foundry/issues/9539
                 if best_number > number {
                     self.blockchain.storage.write().best_number = best_number;
-                    let best_hash =
-                        self.blockchain.storage.read().hash(best_number.into()).ok_or_else(
-                            || {
-                                BlockchainError::RpcError(RpcError::internal_error_with(format!(
-                                    "Best hash not found for best number {best_number}",
-                                )))
-                            },
-                        )?;
-                    self.blockchain.storage.write().best_hash = best_hash;
+                    if let Some(best_hash) =
+                        self.blockchain.storage.read().hash(best_number.into())
+                    {
+                        self.blockchain.storage.write().best_hash = best_hash;
+                    } else if !state.blocks.is_empty() {
+                        return Err(BlockchainError::RpcError(
+                            RpcError::internal_error_with(format!(
+                                "Best hash not found for best number {best_number}",
+                            )),
+                        ));
+                    }
                 } else {
                     // If loading state file on a fork, set best number to the fork block number.
                     // Ref: https://github.com/foundry-rs/foundry/pull/9215#issue-2618681838
@@ -3667,15 +3700,23 @@ impl Backend<FoundryNetwork> {
             } else {
                 self.blockchain.storage.write().best_number = best_number;
 
-                // Set the current best block hash;
-                let best_hash =
-                    self.blockchain.storage.read().hash(best_number.into()).ok_or_else(|| {
-                        BlockchainError::RpcError(RpcError::internal_error_with(format!(
+                // Set the current best block hash.
+                // When loading a snapshot-only dump (no block history), the hash for
+                // best_number won't exist in storage. In that case, keep the existing
+                // best_hash (e.g. genesis hash set during node initialisation).
+                if let Some(best_hash) =
+                    self.blockchain.storage.read().hash(best_number.into())
+                {
+                    self.blockchain.storage.write().best_hash = best_hash;
+                } else if !state.blocks.is_empty() {
+                    // Blocks were provided but the hash is still missing — this is
+                    // unexpected, so surface the error.
+                    return Err(BlockchainError::RpcError(
+                        RpcError::internal_error_with(format!(
                             "Best hash not found for best number {best_number}",
-                        )))
-                    })?;
-
-                self.blockchain.storage.write().best_hash = best_hash;
+                        )),
+                    ));
+                }
             }
         }
 
