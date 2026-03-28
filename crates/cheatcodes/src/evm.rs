@@ -19,16 +19,17 @@ use alloy_primitives::{
 use alloy_rlp::Decodable;
 use alloy_sol_types::SolValue;
 use foundry_common::{
-    fs::{read_json_file, write_json_file},
+    fs::{read_json_file, read_json_gzip_file, write_json_file, write_json_gzip_file},
     slot_identifier::{
         ENCODING_BYTES, ENCODING_DYN_ARRAY, ENCODING_INPLACE, ENCODING_MAPPING, SlotIdentifier,
         SlotInfo,
     },
 };
 use foundry_compilers::artifacts::EvmVersion;
+use foundry_config::fs_permissions::FsAccessKind;
 use foundry_evm_core::{
     FoundryBlock, FoundryTransaction,
-    backend::{DatabaseExt, RevertStateSnapshotAction},
+    backend::{CompatibleStateSnapshot, DatabaseExt, PersistedStateSnapshot, RevertStateSnapshotAction},
     constants::{CALLER, CHEATCODE_ADDRESS, HARDHAT_CONSOLE_ADDRESS, TEST_CONTRACT_ADDRESS},
     env::FoundryContextExt,
     utils::get_blob_base_fee_update_fraction_by_spec_id,
@@ -349,6 +350,36 @@ impl Cheatcode for loadAllocsCall {
     }
 }
 
+impl Cheatcode for loadSnapshotFromFileCall {
+    fn apply_stateful<CTX: EthCheatCtx>(&self, ccx: &mut CheatsCtxt<'_, CTX>) -> Result {
+        let Self { pathToSnapshot } = self;
+
+        let path = ccx.state.config.ensure_path_allowed(pathToSnapshot, FsAccessKind::Read)?;
+        ensure!(path.exists(), "snapshot file does not exist: {pathToSnapshot}");
+
+        let snapshot = read_json_gzip_file::<CompatibleStateSnapshot>(&path)
+            .map(|state| PersistedStateSnapshot { state, foundry_snapshot: None })
+            .or_else(|_| read_json_gzip_file::<PersistedStateSnapshot>(&path))
+            .or_else(|_| {
+                read_json_file::<CompatibleStateSnapshot>(&path)
+                    .map(|state| PersistedStateSnapshot { state, foundry_snapshot: None })
+            })
+            .or_else(|_| read_json_file::<PersistedStateSnapshot>(&path))
+            .map_err(|err| fmt_err!("failed to read persisted state snapshot: {err}"))?;
+
+        let mut evm_env = ccx.ecx.evm_clone();
+        let mut tx_env = ccx.ecx.tx_clone();
+        let journaled_state =
+            ccx.ecx.db_mut().load_persisted_state_snapshot(snapshot, &mut evm_env, &mut tx_env)?;
+
+        ccx.ecx.set_journal_inner(journaled_state);
+        ccx.ecx.set_evm(evm_env);
+        ccx.ecx.set_tx(tx_env);
+
+        Ok(Default::default())
+    }
+}
+
 impl Cheatcode for cloneAccountCall {
     fn apply_stateful<CTX: FoundryContextExt<Db: DatabaseExt>>(
         &self,
@@ -395,6 +426,26 @@ impl Cheatcode for dumpStateCall {
             .collect::<BTreeMap<_, _>>();
 
         write_json_file(path, &alloc)?;
+        Ok(Default::default())
+    }
+}
+
+impl Cheatcode for snapshotStateToFileCall {
+    fn apply_stateful<CTX: EthCheatCtx>(&self, ccx: &mut CheatsCtxt<'_, CTX>) -> Result {
+        let Self { pathToSnapshot } = self;
+        let path = ccx.state.config.ensure_path_allowed(pathToSnapshot, FsAccessKind::Write)?;
+        ccx.state.config.ensure_not_foundry_toml(&path)?;
+
+        let evm_env = ccx.ecx.evm_clone();
+        let snapshot = {
+            let (db, inner) = ccx.ecx.db_journal_inner_mut();
+            db.persisted_state_snapshot(inner, &evm_env)?
+        };
+
+        if ccx.state.fs_commit {
+            write_json_gzip_file(&path, &snapshot)?;
+        }
+
         Ok(Default::default())
     }
 }

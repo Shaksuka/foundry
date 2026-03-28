@@ -99,6 +99,50 @@ contract StateSnapshotTest is Test {
         assertEq(block.timestamp, time, "snapshot revert for block.timestamp unsuccessful");
         assertEq(block.prevrandao, prevrandao, "snapshot revert for block.prevrandao unsuccessful");
     }
+
+    function testStateSnapshotFileRoundTrip() public {
+        string memory path = string.concat(vm.projectRoot(), "/fixtures/Json/test_state_snapshot.json");
+        uint256 num = block.number;
+        uint256 time = block.timestamp;
+        uint256 prevrandao = block.prevrandao;
+
+        vm.snapshotStateToFile(path);
+        bytes memory snapshotFile = vm.readFileBinary(path);
+        assertEq(uint8(snapshotFile[0]), 0x1f);
+        assertEq(uint8(snapshotFile[1]), 0x8b);
+
+        store.slot0 = 300;
+        store.slot1 = 400;
+        vm.warp(1337);
+        vm.roll(99);
+        vm.prevrandao(uint256(123));
+
+        vm.loadSnapshotFromFile(path);
+
+        assertEq(store.slot0, 10, "snapshot file restore for slot 0 unsuccessful");
+        assertEq(store.slot1, 20, "snapshot file restore for slot 1 unsuccessful");
+        assertEq(block.number, num, "snapshot file restore for block.number unsuccessful");
+        assertEq(block.timestamp, time, "snapshot file restore for block.timestamp unsuccessful");
+        assertEq(block.prevrandao, prevrandao, "snapshot file restore for block.prevrandao unsuccessful");
+
+        vm.removeFile(path);
+    }
+
+    function testLoadSnapshotFromAnvilCompatibleFile() public {
+        string memory path =
+            string.concat(vm.projectRoot(), "/fixtures/Json/test_anvil_state_snapshot.json");
+        address target = address(0x420);
+        bytes32 slot = bytes32(uint256(0x10 << 248));
+
+        vm.loadSnapshotFromFile(path);
+
+        assertEq(target.balance, 0xabcd);
+
+        (bool success, bytes memory rd) = target.staticcall("");
+        assertTrue(success);
+        assertEq(abi.decode(rd, (uint256)), 0x42);
+        assertEq(uint256(vm.load(target, slot)), 0xbeef);
+    }
 }
 
 // TODO: remove this test suite once `snapshot*` has been deprecated in favor of `snapshotState*`.

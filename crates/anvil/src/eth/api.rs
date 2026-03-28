@@ -659,6 +659,12 @@ impl EthApi<FoundryNetwork> {
         self.backend.dump_state(preserve_historical_states.unwrap_or(false)).await
     }
 
+    /// Handler for RPC call: `anvil_dumpStateSnapshot`
+    pub async fn anvil_dump_state_snapshot(&self) -> Result<Bytes> {
+        node_info!("anvil_dumpStateSnapshot");
+        self.backend.dump_state_snapshot().await
+    }
+
     /// Returns the current state
     pub async fn serialized_state(
         &self,
@@ -1126,6 +1132,9 @@ impl EthApi<FoundryNetwork> {
                 .anvil_dump_state(preserve_historical_states.and_then(|s| s.params))
                 .await
                 .to_rpc_result(),
+            EthRequest::DumpStateSnapshot(_) => {
+                self.anvil_dump_state_snapshot().await.to_rpc_result()
+            }
             EthRequest::LoadState(buf) => self.anvil_load_state(buf).await.to_rpc_result(),
             EthRequest::NodeInfo(_) => self.anvil_node_info().await.to_rpc_result(),
             EthRequest::AnvilMetadata(_) => self.anvil_metadata().await.to_rpc_result(),

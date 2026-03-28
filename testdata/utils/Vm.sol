@@ -341,6 +341,7 @@ interface Vm {
     function lastCallGas() external view returns (Gas memory gas);
     function load(address target, bytes32 slot) external view returns (bytes32 data);
     function loadAllocs(string calldata pathToAllocsJson) external;
+    function loadSnapshotFromFile(string calldata pathToSnapshot) external;
     function makePersistent(address account) external;
     function makePersistent(address account0, address account1) external;
     function makePersistent(address account0, address account1, address account2) external;
@@ -518,6 +519,7 @@ interface Vm {
     function snapshotGasLastCall(string calldata name) external returns (uint256 gasUsed);
     function snapshotGasLastCall(string calldata group, string calldata name) external returns (uint256 gasUsed);
     function snapshotState() external returns (uint256 snapshotId);
+    function snapshotStateToFile(string calldata pathToSnapshot) external;
     function snapshotValue(string calldata name, uint256 value) external;
     function snapshotValue(string calldata group, string calldata name, uint256 value) external;
     function sort(uint256[] calldata array) external returns (uint256[] memory);

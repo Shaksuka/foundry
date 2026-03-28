@@ -507,6 +507,13 @@ pub enum EthRequest {
     #[serde(rename = "anvil_dumpState", alias = "hardhat_dumpState")]
     DumpState(#[serde(default)] Option<Params<Option<bool>>>),
 
+    /// Serializes only the latest chain snapshot into a saveable data blob.
+    ///
+    /// Unlike `DumpState`, this omits block history, transaction history, and historical state
+    /// snapshots so the dump can be restored faster when only the latest state matters.
+    #[serde(rename = "anvil_dumpStateSnapshot", with = "empty_params")]
+    DumpStateSnapshot(()),
+
     /// Adds state previously dumped with `DumpState` to the current chain
     #[serde(rename = "anvil_loadState", alias = "hardhat_loadState", with = "sequence")]
     LoadState(Bytes),
@@ -1153,6 +1160,14 @@ mod tests {
             EthRequest::DumpState(param) => {
                 assert!(param.is_none());
             }
+            _ => unreachable!(),
+        }
+
+        let s = r#"{"method": "anvil_dumpStateSnapshot", "params": []}"#;
+        let value: serde_json::Value = serde_json::from_str(s).unwrap();
+        let req = serde_json::from_value::<EthRequest>(value).unwrap();
+        match req {
+            EthRequest::DumpStateSnapshot(()) => {}
             _ => unreachable!(),
         }
     }

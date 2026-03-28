@@ -369,6 +369,10 @@ interface Vm {
     #[cheatcode(group = Evm, safety = Unsafe)]
     function dumpState(string calldata pathToStateJson) external;
 
+    /// Persist the current `snapshotState`-compatible EVM state to disk.
+    #[cheatcode(group = Evm, safety = Unsafe)]
+    function snapshotStateToFile(string calldata pathToSnapshot) external;
+
     /// Gets the nonce of an account.
     #[cheatcode(group = Evm, safety = Safe)]
     function getNonce(address account) external view returns (uint64 nonce);
@@ -384,6 +388,10 @@ interface Vm {
     /// Load a genesis JSON file's `allocs` into the in-memory EVM state.
     #[cheatcode(group = Evm, safety = Unsafe)]
     function loadAllocs(string calldata pathToAllocsJson) external;
+
+    /// Restore a previously persisted `snapshotState`-compatible EVM state from disk.
+    #[cheatcode(group = Evm, safety = Unsafe)]
+    function loadSnapshotFromFile(string calldata pathToSnapshot) external;
 
     // -------- Record Debug Traces --------
 
