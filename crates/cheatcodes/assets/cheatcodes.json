@@ -6968,6 +6968,26 @@
     },
     {
       "func": {
+        "id": "loadSnapshotFromFile",
+        "description": "Restore a previously persisted `snapshotState`-compatible EVM state from disk.",
+        "declaration": "function loadSnapshotFromFile(string calldata pathToSnapshot) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "loadSnapshotFromFile(string)",
+        "selector": "0xd2cda2a2",
+        "selectorBytes": [
+          210,
+          205,
+          162,
+          162
+        ]
+      },
+      "group": "evm",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
         "id": "makePersistent_0",
         "description": "Marks that the account(s) should use persistent storage across fork swaps in a multifork setup\nMeaning, changes made to the state of this account will be kept when switching forks.",
         "declaration": "function makePersistent(address account) external;",
@@ -10506,6 +10526,26 @@
           210,
           56,
           53
+        ]
+      },
+      "group": "evm",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
+        "id": "snapshotStateToFile",
+        "description": "Persist the current `snapshotState`-compatible EVM state to disk.",
+        "declaration": "function snapshotStateToFile(string calldata pathToSnapshot) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "snapshotStateToFile(string)",
+        "selector": "0x68deb400",
+        "selectorBytes": [
+          104,
+          222,
+          180,
+          0
         ]
       },
       "group": "evm",

@@ -49,7 +49,10 @@ mod in_memory_db;
 pub use in_memory_db::{EmptyDBWrapper, FoundryEvmInMemoryDB, MemDb};
 
 mod snapshot;
-pub use snapshot::{BackendStateSnapshot, RevertStateSnapshotAction, StateSnapshot};
+pub use snapshot::{
+    BackendStateSnapshot, CompatibleStateSnapshot, PersistedStateSnapshot, RevertStateSnapshotAction,
+    StateSnapshot,
+};
 
 // A `revm::Database` that is used in forking mode
 type ForkDB = CacheDB<SharedBackend>;
@@ -122,6 +125,21 @@ pub trait DatabaseExt<BLOCK = BlockEnv, TX = TxEnv, SPEC = SpecId>:
 
     /// Deletes all state snapshots.
     fn delete_state_snapshots(&mut self);
+
+    /// Creates a state snapshot that can be serialized and restored later.
+    fn persisted_state_snapshot(
+        &mut self,
+        journaled_state: &JournaledState,
+        evm_env: &EvmEnv<SPEC, BLOCK>,
+    ) -> eyre::Result<PersistedStateSnapshot>;
+
+    /// Restores a previously persisted state snapshot.
+    fn load_persisted_state_snapshot(
+        &mut self,
+        snapshot: PersistedStateSnapshot,
+        evm_env: &mut EvmEnv<SPEC, BLOCK>,
+        tx_env: &mut TX,
+    ) -> eyre::Result<JournaledState>;
 
     /// Creates and also selects a new fork
     ///
@@ -1015,6 +1033,57 @@ impl DatabaseExt for Backend {
 
     fn delete_state_snapshots(&mut self) {
         self.inner.state_snapshots.clear()
+    }
+
+    fn persisted_state_snapshot(
+        &mut self,
+        journaled_state: &JournaledState,
+        evm_env: &EvmEnv,
+    ) -> eyre::Result<PersistedStateSnapshot> {
+        if self.active_fork_ids.is_some() {
+            eyre::bail!("persisted state snapshots are not supported while forking");
+        }
+
+        PersistedStateSnapshot::from_snapshot(BackendStateSnapshot::new(
+            self.mem_db.clone(),
+            journaled_state.clone(),
+            evm_env.clone(),
+        ))
+    }
+
+    fn load_persisted_state_snapshot(
+        &mut self,
+        snapshot: PersistedStateSnapshot,
+        evm_env: &mut EvmEnv,
+        tx_env: &mut TxEnv,
+    ) -> eyre::Result<JournaledState> {
+        if self.active_fork_ids.is_some() {
+            eyre::bail!("loading persisted state snapshots is not supported while forking");
+        }
+
+        let block_env = snapshot.block_env();
+        if let Some(BackendStateSnapshot { db, journaled_state, snap_evm_env }) =
+            snapshot.clone().into_snapshot()?
+        {
+            self.mem_db = db;
+            self.inner.state_snapshots.clear();
+            update_current_env_with_fork_env(evm_env, tx_env, snap_evm_env);
+            return Ok(journaled_state);
+        }
+
+        self.mem_db = Default::default();
+        self.inner.state_snapshots.clear();
+        let mut journaled_state = self.inner.new_journaled_state();
+        let allocs = snapshot.into_allocs();
+        self.load_allocs(&allocs, &mut journaled_state)?;
+        if let Some(block_env) = block_env {
+            update_current_env_with_fork_env(
+                evm_env,
+                tx_env,
+                EvmEnv { cfg_env: evm_env.cfg_env.clone(), block_env },
+            );
+        }
+        Ok(journaled_state)
     }
 
     fn create_fork(&mut self, create_fork: CreateFork) -> eyre::Result<LocalForkId> {

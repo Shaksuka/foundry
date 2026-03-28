@@ -4,8 +4,8 @@ use super::BackendError;
 use crate::{
     EthInspectorExt,
     backend::{
-        Backend, DatabaseExt, JournaledState, LocalForkId, RevertStateSnapshotAction,
-        diagnostic::RevertDiagnostic,
+        Backend, DatabaseExt, JournaledState, LocalForkId, PersistedStateSnapshot,
+        RevertStateSnapshotAction, diagnostic::RevertDiagnostic,
     },
     fork::{CreateFork, ForkId},
 };
@@ -144,6 +144,23 @@ impl DatabaseExt for CowBackend<'_> {
         if let Some(backend) = self.initialized_backend_mut() {
             backend.delete_state_snapshots()
         }
+    }
+
+    fn persisted_state_snapshot(
+        &mut self,
+        journaled_state: &JournaledState,
+        evm_env: &EvmEnv,
+    ) -> eyre::Result<PersistedStateSnapshot> {
+        self.backend_mut().persisted_state_snapshot(journaled_state, evm_env)
+    }
+
+    fn load_persisted_state_snapshot(
+        &mut self,
+        snapshot: PersistedStateSnapshot,
+        evm_env: &mut EvmEnv,
+        tx_env: &mut TxEnv,
+    ) -> eyre::Result<JournaledState> {
+        self.backend_mut().load_persisted_state_snapshot(snapshot, evm_env, tx_env)
     }
 
     fn create_fork(&mut self, fork: CreateFork) -> eyre::Result<LocalForkId> {
