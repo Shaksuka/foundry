@@ -52,6 +52,7 @@ $ make pr
 - [Debugging](./debugging.md)
 - [Scripting](./scripting.md)
 - [Custom Network Features](./networks.md)
+- [Snapshot-Only State Dump](./snapshot-state.md)
 
 _Note: This is incomplete and possibly outdated_
 
